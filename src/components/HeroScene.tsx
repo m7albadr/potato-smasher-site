@@ -1,8 +1,11 @@
-import { useRef, Suspense, useMemo, useEffect } from "react";
+import { useRef, Suspense, useMemo, useEffect, useState } from "react";
 import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
-/* ── Scroll state — written by scroll listener, read in rAF ── */
+/* ── Device detection ── */
+const isMobile = () => window.innerWidth < 768 || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+/* ── Scroll state ── */
 const scroll = { target: 0, current: 0, rawY: 0 };
 
 function useScrollProgress() {
@@ -17,17 +20,19 @@ function useScrollProgress() {
   }, []);
 }
 
-/* ── Camera: smooth lerp toward scroll target ── */
-function SmoothCamera() {
+/* ── Camera: smooth lerp ── */
+function SmoothCamera({ mobile }: { mobile: boolean }) {
   const { camera } = useThree();
 
   useFrame(() => {
-    // Lerp for buttery smooth movement
     scroll.current += (scroll.target - scroll.current) * 0.04;
     const p = scroll.current;
-    const angle = p * Math.PI * 4;
-    const radius = 5.5 - p * 1.5;
-    const height = Math.sin(p * Math.PI * 2) * 0.8;
+    // Mobile: gentler orbit (1 rotation vs 2), pulled back further
+    const orbits = mobile ? Math.PI * 2 : Math.PI * 4;
+    const baseRadius = mobile ? 6.5 : 5.5;
+    const angle = p * orbits;
+    const radius = baseRadius - p * 1.2;
+    const height = Math.sin(p * Math.PI * 2) * (mobile ? 0.4 : 0.8);
 
     camera.position.x = Math.sin(angle) * radius;
     camera.position.y = height;
@@ -39,9 +44,8 @@ function SmoothCamera() {
 }
 
 /* ── Particles ── */
-function Particles() {
+function Particles({ count }: { count: number }) {
   const ref = useRef<THREE.Points>(null!);
-  const count = 80;
 
   const positions = useMemo(() => {
     const arr = new Float32Array(count * 3);
@@ -54,7 +58,7 @@ function Particles() {
       arr[i * 3 + 2] = r * Math.cos(phi);
     }
     return arr;
-  }, []);
+  }, [count]);
 
   useFrame((s) => {
     if (!ref.current) return;
@@ -66,7 +70,7 @@ function Particles() {
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
       </bufferGeometry>
-      <pointsMaterial color="#d4a843" size={0.02} sizeAttenuation transparent opacity={0.5} blending={THREE.AdditiveBlending} depthWrite={false} />
+      <pointsMaterial color="#d4a843" size={0.025} sizeAttenuation transparent opacity={0.5} blending={THREE.AdditiveBlending} depthWrite={false} />
     </points>
   );
 }
@@ -82,21 +86,21 @@ function Ring({ radius, speed, opacity, rot }: { radius: number; speed: number; 
 
   return (
     <mesh ref={ref} rotation={rot}>
-      <torusGeometry args={[radius, 0.007, 12, 80]} />
+      <torusGeometry args={[radius, 0.007, 12, 64]} />
       <meshBasicMaterial color="#d4a843" transparent opacity={opacity} toneMapped={false} />
     </mesh>
   );
 }
 
 /* ── Photo ── */
-function Photo() {
+function Photo({ mobile }: { mobile: boolean }) {
   const ref = useRef<THREE.Group>(null!);
   const texture = useLoader(THREE.TextureLoader, "/IMG_8537.jpg");
 
   const aspect = texture.image ? texture.image.width / texture.image.height : 3 / 4;
-  const s = 2.0;
-  const w = s * Math.min(aspect, 1);
-  const h = s * (aspect < 1 ? 1 : 1 / aspect);
+  const scale = mobile ? 1.5 : 2.0;
+  const w = scale * Math.min(aspect, 1);
+  const h = scale * (aspect < 1 ? 1 : 1 / aspect);
 
   useFrame((state) => {
     if (!ref.current) return;
@@ -105,17 +109,14 @@ function Photo() {
 
   return (
     <group ref={ref}>
-      {/* Soft glow behind */}
       <mesh position={[0, 0, -0.06]}>
         <planeGeometry args={[w + 0.4, h + 0.4]} />
         <meshBasicMaterial color="#d4a843" transparent opacity={0.03} blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
       </mesh>
-      {/* Border */}
       <mesh position={[0, 0, -0.02]}>
         <planeGeometry args={[w + 0.06, h + 0.06]} />
         <meshBasicMaterial color="#d4a843" transparent opacity={0.3} toneMapped={false} />
       </mesh>
-      {/* Photo */}
       <mesh>
         <planeGeometry args={[w, h]} />
         <meshBasicMaterial map={texture} toneMapped={false} />
@@ -124,58 +125,66 @@ function Photo() {
   );
 }
 
-/* ── Scene — no post-processing ── */
-function Scene() {
+/* ── Scene ── */
+function Scene({ mobile }: { mobile: boolean }) {
   return (
     <>
-      <SmoothCamera />
+      <SmoothCamera mobile={mobile} />
       <ambientLight intensity={0.1} />
       <pointLight position={[0, 3, 5]} intensity={0.3} color="#d4a843" />
 
-      <Photo />
+      <Photo mobile={mobile} />
 
-      <Ring radius={2.3} speed={0.15} opacity={0.2} rot={[Math.PI / 2, 0, 0]} />
-      <Ring radius={2.8} speed={-0.08} opacity={0.08} rot={[Math.PI / 3, Math.PI / 6, 0]} />
+      <Ring radius={mobile ? 1.8 : 2.3} speed={0.15} opacity={0.2} rot={[Math.PI / 2, 0, 0]} />
+      {!mobile && <Ring radius={2.8} speed={-0.08} opacity={0.08} rot={[Math.PI / 3, Math.PI / 6, 0]} />}
 
-      <Particles />
+      <Particles count={mobile ? 35 : 80} />
     </>
   );
 }
 
 export function HeroScene() {
   useScrollProgress();
+  const [mobile, setMobile] = useState(false);
+
+  useEffect(() => {
+    setMobile(isMobile());
+    const onResize = () => setMobile(isMobile());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   return (
     <div className="fixed inset-0 z-0">
       <Canvas
-        camera={{ position: [0, 0, 5.5], fov: 50 }}
+        camera={{ position: [0, 0, mobile ? 6.5 : 5.5], fov: mobile ? 55 : 50 }}
         gl={{ antialias: false, powerPreference: "high-performance" }}
         dpr={1}
         style={{ background: "#050505" }}
       >
         <Suspense fallback={null}>
-          <Scene />
+          <Scene mobile={mobile} />
         </Suspense>
       </Canvas>
 
-      {/* CSS vignette — free compared to GPU post-processing */}
-      <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: "inset 0 0 200px 60px #050505" }} />
+      {/* CSS vignette */}
+      <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: "inset 0 0 150px 40px #050505" }} />
 
       {/* Text overlay */}
       <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-10" id="hero-text-overlay">
-        <div className="absolute" style={{ top: "12%" }}>
-          <h1 className="text-4xl md:text-5xl lg:text-6xl font-display tracking-[0.4em] text-[#d4a843] glow-text-strong">
+        <div className="absolute" style={{ top: "14%" }}>
+          <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-display tracking-[0.3em] sm:tracking-[0.4em] text-[#d4a843] glow-text-strong">
             WANTED
           </h1>
         </div>
-        <div className="absolute text-center" style={{ bottom: "18%" }}>
-          <p className="text-base md:text-lg font-display tracking-[0.2em] text-[#f5e6c8] glow-text mb-2">
+        <div className="absolute text-center px-4" style={{ bottom: "16%" }}>
+          <p className="text-sm sm:text-base md:text-lg font-display tracking-[0.15em] sm:tracking-[0.2em] text-[#f5e6c8] glow-text mb-2">
             SUBJECT: POTATO SMASHER
           </p>
-          <p className="text-[10px] tracking-[0.35em] text-[#8b6914] font-mono">
+          <p className="text-[8px] sm:text-[10px] tracking-[0.25em] sm:tracking-[0.35em] text-[#8b6914] font-mono">
             BUREAU OF POTATO INVESTIGATION
           </p>
-          <p className="text-[9px] tracking-[0.3em] text-[#5a4520] font-mono mt-1">
+          <p className="text-[7px] sm:text-[9px] tracking-[0.2em] sm:tracking-[0.3em] text-[#5a4520] font-mono mt-1">
             CASE FILE #PSM-2026-0042 // CLASSIFIED
           </p>
         </div>
